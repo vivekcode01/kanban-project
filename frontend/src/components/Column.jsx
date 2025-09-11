@@ -1,5 +1,5 @@
 // In Board.jsx, Card.jsx, Column.jsx...
-import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import { Droppable, Draggable } from '@hello-pangea/dnd';
 import React, { useState } from 'react';
 
 import CardItem from './CardItem';
