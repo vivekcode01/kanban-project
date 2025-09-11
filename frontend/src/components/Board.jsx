@@ -1,5 +1,4 @@
-
-import { Droppable, Draggable } from '@hello-pangea/dnd';
+import { DragDropContext } from '@hello-pangea/dnd';
 import React, { useEffect, useState } from 'react';
 import Column from './Column';
 
