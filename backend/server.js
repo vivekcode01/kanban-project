@@ -11,10 +11,12 @@ const port = process.env.PORT || 8080; // Use environment port or default to 808
 
 // --- Create HTTP Server and Integrate Socket.IO ---
 const server = http.createServer(app);
+// backend/server.js
+
 const io = new Server(server, {
   cors: {
-    origin: "*", // In production, restrict this to your frontend URL
-    methods: ["GET", "POST", "PUT", "DELETE"]
+    origin: "https://kanbantodo1.netlify.app", // THIS IS THE FIX
+    methods: ["GET", "POST"]
   }
 });
 
