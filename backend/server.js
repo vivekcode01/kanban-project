@@ -1,23 +1,23 @@
-// require('dotenv').config();
+require('dotenv').config();
 const express = require("express");
 const cors = require("cors");
-const { Sequelize, DataTypes, Op } = require("sequelize"); // Import Op for operators
+const { Sequelize, DataTypes, Op } = require("sequelize");
 const { v4: uuidv4 } = require('uuid');
 const http = require('http');
 const { Server } = require("socket.io");
 
 const app = express();
-const port = 8080; // Use environment port or default to 8080
+const port = 8080; // THIS IS THE KEY FIX
 
 // --- Create HTTP Server and Integrate Socket.IO ---
 const server = http.createServer(app);
-// backend/server.js
-
 const io = new Server(server, {
   cors: {
-    origin: "https://kanbantodo1.netlify.app", // THIS IS THE FIX
-    methods: ["GET", "POST"]
-  }
+    origin: "https://kanbantodo1.netlify.app",
+    methods: ["GET", "POST", "PUT", "DELETE"]
+  },
+  pingInterval: 10000,
+  pingTimeout: 5000
 });
 
 app.use(cors());
@@ -32,7 +32,7 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
       rejectUnauthorized: false
     }
   },
-  logging: false // Optional: disable logging for cleaner console output
+  logging: false
 });
 
 // --- Model Definitions ---
@@ -48,22 +48,18 @@ Card.belongsTo(Column, { foreignKey: 'ColumnId' });
 
 // --- Middleware to broadcast updates ---
 const broadcastUpdate = (req, res, next) => {
-  // This function will be called after the route handler successfully finishes
   res.on('finish', () => {
     if (res.statusCode >= 200 && res.statusCode < 300) {
       console.log('Change detected, emitting board.updated');
-      io.emit("board.updated"); // Correct event name with a dot
+      io.emit("board.updated");
     }
   });
   next();
 };
 
 // --- API Routes ---
-
-// Health Check Endpoint
 app.get("/", (req, res) => { res.status(200).send("Server is live and healthy"); });
 
-// Get a specific board
 app.get("/api/board/:id", async (req, res) => {
   try {
     const board = await Board.findByPk(req.params.id, {
@@ -83,7 +79,6 @@ app.get("/api/board/:id", async (req, res) => {
   }
 });
 
-// Create a board (if it doesn't exist)
 app.post('/api/board', broadcastUpdate, async (req, res) => {
     try {
         const [board, created] = await Board.findOrCreate({
@@ -97,8 +92,6 @@ app.post('/api/board', broadcastUpdate, async (req, res) => {
     }
 });
 
-
-// Create a column
 app.post("/api/column", broadcastUpdate, async (req, res) => {
   try {
     const col = await Column.create({
@@ -114,7 +107,6 @@ app.post("/api/column", broadcastUpdate, async (req, res) => {
   }
 });
 
-// Update a column (for renaming) - NEW
 app.put("/api/column/:id", broadcastUpdate, async (req, res) => {
     try {
         await Column.update(
@@ -128,18 +120,16 @@ app.put("/api/column/:id", broadcastUpdate, async (req, res) => {
     }
 });
 
-// Delete a column - NEW
 app.delete("/api/column/:id", broadcastUpdate, async (req, res) => {
     try {
         await Column.destroy({ where: { id: req.params.id } });
-        res.sendStatus(204); // No Content
+        res.sendStatus(204);
     } catch (error) {
         console.error("DELETE /api/column/:id Error:", error);
         res.status(500).json({ error: "Failed to delete column." });
     }
 });
 
-// Create a card
 app.post("/api/card", broadcastUpdate, async (req, res) => {
   try {
     const card = await Card.create({
@@ -156,7 +146,6 @@ app.post("/api/card", broadcastUpdate, async (req, res) => {
   }
 });
 
-// Update a card's text content - NEW
 app.put("/api/card/:id", broadcastUpdate, async (req, res) => {
   try {
     const { title, description } = req.body;
@@ -171,54 +160,41 @@ app.put("/api/card/:id", broadcastUpdate, async (req, res) => {
   }
 });
 
-// Move a card (for drag-and-drop) - NEW & IMPROVED
 app.put("/api/card/:id/move", broadcastUpdate, async (req, res) => {
     const { newColumnId, newPosition } = req.body;
     const cardId = req.params.id;
-
     try {
         await sequelize.transaction(async (t) => {
             const card = await Card.findByPk(cardId, { transaction: t });
-            if (!card) {
-                return res.status(404).json({ error: 'Card not found' });
-            }
+            if (!card) return res.status(404).json({ error: 'Card not found' });
+            
             const oldColumnId = card.ColumnId;
             const oldPosition = card.position;
 
-            // Scenario 1: Moving within the same column
             if (oldColumnId === newColumnId) {
                 if (newPosition > oldPosition) {
-                    // Moving down: shift cards between old and new pos up
                     await Card.update({ position: Sequelize.literal('position - 1') }, {
                         where: { ColumnId: oldColumnId, position: { [Op.gt]: oldPosition, [Op.lte]: newPosition } },
                         transaction: t
                     });
                 } else {
-                    // Moving up: shift cards between new and old pos down
                     await Card.update({ position: Sequelize.literal('position + 1') }, {
                         where: { ColumnId: oldColumnId, position: { [Op.gte]: newPosition, [Op.lt]: oldPosition } },
                         transaction: t
                     });
                 }
-            }
-            // Scenario 2: Moving to a different column
-            else {
-                // Shift cards down in the old column to fill the gap
+            } else {
                 await Card.update({ position: Sequelize.literal('position - 1') }, {
                     where: { ColumnId: oldColumnId, position: { [Op.gt]: oldPosition } },
                     transaction: t
                 });
-                // Shift cards down in the new column to make space
                 await Card.update({ position: Sequelize.literal('position + 1') }, {
                     where: { ColumnId: newColumnId, position: { [Op.gte]: newPosition } },
                     transaction: t
                 });
             }
-
-            // Finally, update the moved card's position and column
             await card.update({ position: newPosition, ColumnId: newColumnId }, { transaction: t });
         });
-
         res.sendStatus(200);
     } catch (error) {
         console.error("PUT /api/card/:id/move Error:", error);
@@ -226,35 +202,29 @@ app.put("/api/card/:id/move", broadcastUpdate, async (req, res) => {
     }
 });
 
-
-// Delete a card - NEW
 app.delete("/api/card/:id", broadcastUpdate, async (req, res) => {
     try {
-        // We need to re-order the remaining cards in the column
         await sequelize.transaction(async (t) => {
             const card = await Card.findByPk(req.params.id, { transaction: t });
             if (card) {
                 const { ColumnId, position } = card;
                 await Card.destroy({ where: { id: req.params.id }, transaction: t });
-                // Shift cards up to fill the gap
                 await Card.update({ position: Sequelize.literal('position - 1') }, {
                     where: { ColumnId: ColumnId, position: { [Op.gt]: position } },
                     transaction: t
                 });
             }
         });
-        res.sendStatus(204); // No Content
+        res.sendStatus(204);
     } catch (error) {
         console.error("DELETE /api/card/:id Error:", error);
         res.status(500).json({ error: "Failed to delete card." });
     }
 });
 
-
 // --- Socket.IO Connection Logic ---
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
-
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
   });
@@ -264,7 +234,6 @@ io.on('connection', (socket) => {
 server.listen(port, async () => {
   try {
     await sequelize.sync();
-    // Ensure the default board exists
     await Board.findOrCreate({
         where: { id: "board-1" },
         defaults: { title: "My Kanban Board" }
@@ -275,3 +244,4 @@ server.listen(port, async () => {
     console.error("Unable to sync database:", error);
   }
 });
+
