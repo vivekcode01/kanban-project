@@ -32,7 +32,7 @@ export default function Board() {
       const columnMap = {};
       columns.forEach(col => {
         // 1. Find all cards that belong to this column
-        const cardsInColumn = cards.filter(card => card.columnId === col.id);
+        const cardsInColumn = cards.filter(card => card.ColumnId === col.id);
         
         // 2. Sort those cards by their saved position
         cardsInColumn.sort((a, b) => a.position - b.position);
