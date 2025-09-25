@@ -31,16 +31,17 @@ export default function Board() {
       // Create the map of columns, ensuring cards within are sorted
       const columnMap = {};
       columns.forEach(col => {
-        // 1. Find all cards that belong to this column
+        // Find all cards that belong to this column
+        // THIS IS THE FIX: Changed card.columnId to card.ColumnId
         const cardsInColumn = cards.filter(card => card.ColumnId === col.id);
         
-        // 2. Sort those cards by their saved position
+        // Sort those cards by their saved position
         cardsInColumn.sort((a, b) => a.position - b.position);
 
-        // 3. Get the final, sorted array of card IDs
+        // Get the final, sorted array of card IDs
         const sortedCardIds = cardsInColumn.map(card => card.id);
 
-        // 4. Add the column to our map with the correctly sorted card IDs
+        // Add the column to our map with the correctly sorted card IDs
         columnMap[col.id] = { ...col, cardIds: sortedCardIds };
       });
 
@@ -50,9 +51,9 @@ export default function Board() {
         cards: cardMap
       });
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching board data:", err);
     }
-  }, []); // Empty dependency array because it has no external dependencies
+  }, []); // Empty dependency array, this function will not change
 
   // Load initial board data
   useEffect(() => {
