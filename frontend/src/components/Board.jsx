@@ -1,238 +1,188 @@
 import { DragDropContext } from '@hello-pangea/dnd';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Column from './Column';
-
 import axios from 'axios';
+import io from 'socket.io-client'; // 1. Import socket.io-client
 
-const API_URL = "https://kanban-backend-api-8q9j.onrender.com/api"; // backend base url
+const API_URL = "https://kanban-backend-api-8q9j.onrender.com/api";
+const SOCKET_URL = "https://kanban-backend-api-8q9j.onrender.com"; // 2. Add your backend URL for the socket connection
 const BOARD_ID = "board-1";
 
 export default function Board() {
   const [data, setData] = useState(null);
   const [newColTitle, setNewColTitle] = useState('');
 
-  // Load board
-  useEffect(() => {
-    async function fetchBoard() {
-      try {
-        const res = await axios.get(`${API_URL}/board/${BOARD_ID}`);
-        if (!res.data.board) {
-          // create board if not exists
-          await axios.post(`${API_URL}/board`, { id: BOARD_ID, title: "My Kanban" });
-          return fetchBoard();
-        }
-       // PASTE THIS NEW BLOCK IN ITS PLACE
-
-const { columns, cards } = res.data;
-
-// Create a map of all cards for easy lookup
-const cardMap = {};
-cards.forEach(card => { cardMap[card.id] = card; });
-
-// Create the map of columns, ensuring cards within are sorted
-const columnMap = {};
-columns.forEach(col => {
-  // 1. Find all cards that belong to this column
-  const cardsInColumn = cards.filter(card => card.columnId === col.id);
-  
-  // 2. Sort those cards by their saved position
-  cardsInColumn.sort((a, b) => a.position - b.position);
-
-  // 3. Get the final, sorted array of card IDs
-  const sortedCardIds = cardsInColumn.map(card => card.id);
-
-  // 4. Add the column to our map with the correctly sorted card IDs
-  columnMap[col.id] = { ...col, cardIds: sortedCardIds };
-});
-
-setData({
-  columns: columnMap,
-  columnOrder: columns.map(c => c.id),
-  cards: cardMap
-});
-      } catch (err) {
-        console.error(err);
+  // 3. Wrap data fetching in useCallback so it can be used in multiple effects
+  const fetchBoard = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_URL}/board/${BOARD_ID}`);
+      if (!res.data.board) {
+        // create board if not exists
+        await axios.post(`${API_URL}/board`, { id: BOARD_ID, title: "My Kanban" });
+        return fetchBoard();
       }
+
+      const { columns, cards } = res.data;
+
+      // Create a map of all cards for easy lookup
+      const cardMap = {};
+      cards.forEach(card => { cardMap[card.id] = card; });
+
+      // Create the map of columns, ensuring cards within are sorted
+      const columnMap = {};
+      columns.forEach(col => {
+        // 1. Find all cards that belong to this column
+        const cardsInColumn = cards.filter(card => card.columnId === col.id);
+        
+        // 2. Sort those cards by their saved position
+        cardsInColumn.sort((a, b) => a.position - b.position);
+
+        // 3. Get the final, sorted array of card IDs
+        const sortedCardIds = cardsInColumn.map(card => card.id);
+
+        // 4. Add the column to our map with the correctly sorted card IDs
+        columnMap[col.id] = { ...col, cardIds: sortedCardIds };
+      });
+
+      setData({
+        columns: columnMap,
+        columnOrder: columns.map(c => c.id),
+        cards: cardMap
+      });
+    } catch (err) {
+      console.error(err);
     }
+  }, []); // Empty dependency array because it has no external dependencies
+
+  // Load initial board data
+  useEffect(() => {
     fetchBoard();
-  }, []);
+  }, [fetchBoard]);
+
+  // 4. Add a new useEffect hook for WebSocket connection and listeners
+  useEffect(() => {
+    // Connect to the WebSocket server
+    const socket = io(SOCKET_URL);
+
+    // Listen for the 'board.updated' event
+    // This event should be emitted by your server after any change to the board (add, delete, move, etc.)
+    socket.on('board.updated', () => {
+      console.log('Board update received via WebSocket. Refetching data...');
+      fetchBoard();
+    });
+
+    // Clean up the connection when the component unmounts
+    return () => {
+      socket.disconnect();
+    };
+  }, [fetchBoard]); // Rerun if fetchBoard changes (which it won't, due to useCallback)
 
   if (!data) return <p>Loading board...</p>;
 
+  // This function is no longer needed since state is updated by re-fetching.
+  // However, optimistic updates can use it for a snappier UI feel.
+  // We will keep it for the drag-and-drop optimistic update.
   const persist = (next) => setData(next);
 
   const onDragEnd = async (result) => {
-  const { destination, source, draggableId } = result;
-  if (!destination) return;
+    const { destination, source, draggableId } = result;
+    if (!destination) return;
 
-  // If dropped back in same place → ignore
-  if (
-    destination.droppableId === source.droppableId &&
-    destination.index === source.index
-  ) {
-    return;
-  }
+    if (
+      destination.droppableId === source.droppableId &&
+      destination.index === source.index
+    ) {
+      return;
+    }
 
-  // Create deep copy of state
-  const start = data.columns[source.droppableId];
-  const finish = data.columns[destination.droppableId];
+    const start = data.columns[source.droppableId];
+    const finish = data.columns[destination.droppableId];
 
-  if (start === finish) {
-    // Reorder inside same column
-    const newCardIds = Array.from(start.cardIds);
-    newCardIds.splice(source.index, 1);
-    newCardIds.splice(destination.index, 0, draggableId);
+    // --- Start Optimistic Update ---
+    // This part updates the UI immediately for a smooth user experience
+    // The server will send a 'board.updated' event which will correct any inconsistencies.
+    if (start === finish) {
+      const newCardIds = Array.from(start.cardIds);
+      newCardIds.splice(source.index, 1);
+      newCardIds.splice(destination.index, 0, draggableId);
 
-    const newColumn = { ...start, cardIds: newCardIds };
+      const newColumn = { ...start, cardIds: newCardIds };
+      const next = {
+        ...data,
+        columns: { ...data.columns, [newColumn.id]: newColumn },
+      };
+      persist(next);
+    } else {
+      const startCardIds = Array.from(start.cardIds);
+      startCardIds.splice(source.index, 1);
+      const newStart = { ...start, cardIds: startCardIds };
 
-    const next = {
-      ...data,
-      columns: { ...data.columns, [newColumn.id]: newColumn },
-    };
+      const finishCardIds = Array.from(finish.cardIds);
+      finishCardIds.splice(destination.index, 0, draggableId);
+      const newFinish = { ...finish, cardIds: finishCardIds };
 
-    persist(next);
-
-    // Update DB positions
-    await axios.put(`${API_URL}/card/${draggableId}`, {
-      ...data.cards[draggableId],
-      position: destination.index,
-      columnId: start.id,
-    });
-  } else {
-    // Moving to different column
-    const startCardIds = Array.from(start.cardIds);
-    startCardIds.splice(source.index, 1);
-    const newStart = { ...start, cardIds: startCardIds };
-
-    const finishCardIds = Array.from(finish.cardIds);
-    finishCardIds.splice(destination.index, 0, draggableId);
-    const newFinish = { ...finish, cardIds: finishCardIds };
-
-    const next = {
-      ...data,
-      columns: {
-        ...data.columns,
-        [newStart.id]: newStart,
-        [newFinish.id]: newFinish,
-      },
-      cards: {
-        ...data.cards,
-        [draggableId]: {
-          ...data.cards[draggableId],
-          columnId: finish.id,
+      const next = {
+        ...data,
+        columns: {
+          ...data.columns,
+          [newStart.id]: newStart,
+          [newFinish.id]: newFinish,
         },
-      },
-    };
+      };
+      persist(next);
+    }
+    // --- End Optimistic Update ---
 
-    persist(next);
-
-    // Update DB
-    await axios.put(`${API_URL}/card/${draggableId}`, {
-      ...data.cards[draggableId],
-      position: destination.index,
-      columnId: finish.id,
+    // Send the update to the server. The server will handle updating the database
+    // and then emitting the 'board.updated' event to all clients.
+    await axios.put(`${API_URL}/card/${draggableId}/move`, {
+      newColumnId: destination.droppableId,
+      newPosition: destination.index,
     });
-  }
-};
-
-
-  // Column CRUD
-  // Add Column
-const addColumn = async (title) => {
-  const res = await axios.post(`${API_URL}/column`, {
-    title,
-    position: data.columnOrder.length,
-    boardId: BOARD_ID, // pick actual board
-  });
-
-  const col = res.data;
-  const next = {
-    ...data,
-    columns: { ...data.columns, [col.id]: { ...col, cardIds: [] } },
-    columnOrder: [...data.columnOrder, col.id],
   };
-  persist(next);
-};
 
-  // Card CRUD
-  // Add Card
-const addCard = async (colId, title) => {
-  const res = await axios.post(`${API_URL}/card`, {
-    title,
-    description: "",
-    position: data.columns[colId].cardIds.length,
-    columnId: colId,
-  });
+  // --- CRUD Operations ---
+  // These functions now only need to make the API request.
+  // The state update will be handled by the WebSocket listener.
 
-  const card = res.data;
-  const next = {
-    ...data,
-    cards: { ...data.cards, [card.id]: card },
-    columns: {
-      ...data.columns,
-      [colId]: {
-        ...data.columns[colId],
-        cardIds: [...data.columns[colId].cardIds, card.id],
-      },
-    },
+  const addColumn = async (title) => {
+    if (!title) return;
+    await axios.post(`${API_URL}/column`, {
+      title,
+      position: data.columnOrder.length,
+      boardId: BOARD_ID,
+    });
+    setNewColTitle(''); // Clear input
   };
-  persist(next);
-};
-  // Update card
-const updateCard = async (cardId, updates) => {
-  const card = { ...data.cards[cardId], ...updates };
-  await axios.put(`${API_URL}/card/${cardId}`, card);
-  const next = {
-    ...data,
-    cards: { ...data.cards, [cardId]: card },
-  };
-  persist(next);
-};
 
-// Delete card
-const deleteCard = async (cardId) => {
-  await axios.delete(`${API_URL}/card/${cardId}`);
-  const { columnId } = data.cards[cardId];
-  const newCards = { ...data.cards };
-  delete newCards[cardId];
-  const next = {
-    ...data,
-    cards: newCards,
-    columns: {
-      ...data.columns,
-      [columnId]: {
-        ...data.columns[columnId],
-        cardIds: data.columns[columnId].cardIds.filter((id) => id !== cardId),
-      },
-    },
+  const addCard = async (colId, title) => {
+    if (!title) return;
+    await axios.post(`${API_URL}/card`, {
+      title,
+      description: "",
+      position: data.columns[colId].cardIds.length,
+      columnId: colId,
+    });
   };
-  persist(next);
-};
 
-// Update column
-const renameColumn = async (colId, newTitle) => {
-  const col = { ...data.columns[colId], title: newTitle };
-  await axios.put(`${API_URL}/column/${colId}`, col);
-  const next = {
-    ...data,
-    columns: { ...data.columns, [colId]: col },
+  const updateCard = async (cardId, updates) => {
+    const card = { ...data.cards[cardId], ...updates };
+    await axios.put(`${API_URL}/card/${cardId}`, card);
   };
-  persist(next);
-};
 
-// Delete column
-const deleteColumn = async (colId) => {
-  await axios.delete(`${API_URL}/column/${colId}`);
-  const newColumns = { ...data.columns };
-  delete newColumns[colId];
-  const next = {
-    ...data,
-    columns: newColumns,
-    columnOrder: data.columnOrder.filter((id) => id !== colId),
+  const deleteCard = async (cardId) => {
+    await axios.delete(`${API_URL}/card/${cardId}`);
   };
-  persist(next);
-};
 
+  const renameColumn = async (colId, newTitle) => {
+    if (!newTitle) return;
+    const col = { ...data.columns[colId], title: newTitle };
+    await axios.put(`${API_URL}/column/${colId}`, col);
+  };
+
+  const deleteColumn = async (colId) => {
+    await axios.delete(`${API_URL}/column/${colId}`);
+  };
 
   return (
     <div>
@@ -249,14 +199,14 @@ const deleteColumn = async (colId) => {
             const cards = col.cardIds.map(cid => data.cards[cid]).filter(Boolean);
             return (
               <Column
-                 key={col.id}
-  column={col}
-  cards={cards}
-  addCard={addCard}
-  updateCard={updateCard}
-  deleteCard={deleteCard}
-  renameColumn={renameColumn}
-  deleteColumn={deleteColumn}
+                key={col.id}
+                column={col}
+                cards={cards}
+                addCard={addCard}
+                updateCard={updateCard}
+                deleteCard={deleteCard}
+                renameColumn={renameColumn}
+                deleteColumn={deleteColumn}
               />
             );
           })}
