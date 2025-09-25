@@ -62,7 +62,10 @@ export default function Board() {
   // 4. Add a new useEffect hook for WebSocket connection and listeners
   useEffect(() => {
     // Connect to the WebSocket server
-    const socket = io(SOCKET_URL);
+    // This is the NEW, corrected line
+const socket = io(SOCKET_URL, {
+  transports: ['websocket']
+});
 
     // Listen for the 'board.updated' event
     // This event should be emitted by your server after any change to the board (add, delete, move, etc.)
