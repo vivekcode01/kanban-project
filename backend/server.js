@@ -7,7 +7,7 @@ const http = require('http');
 const { Server } = require("socket.io");
 
 const app = express();
-const port = process.env.PORT || 8080; // Use environment port or default to 8080
+const port = 8080; // Use environment port or default to 8080
 
 // --- Create HTTP Server and Integrate Socket.IO ---
 const server = http.createServer(app);
